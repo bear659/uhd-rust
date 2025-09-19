@@ -842,6 +842,11 @@ impl Usrp {
         })?;
         Ok(value)
     }
+
+    /// Sets the frequency of the master clock
+    pub fn set_master_clock_rate(&self, rate: f64, mboard: usize) -> Result<(), Error> {
+        check_status(unsafe { uhd_sys::uhd_usrp_set_master_clock_rate(self.0, rate, mboard as _) })
+    }
 }
 
 impl Drop for Usrp {
