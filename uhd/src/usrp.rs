@@ -808,6 +808,7 @@ impl Usrp {
         attr: &str,
         value: u32,
         mask: u32,
+        mboard: usize,
     ) -> Result<(), Error> {
         let bank_c = CString::new(bank)?;
         let attr_c = CString::new(attr)?;
@@ -819,19 +820,25 @@ impl Usrp {
                 attr_c.as_ptr(),
                 value,
                 mask,
-                0,
+                mboard as _,
             )
         })
     }
 
     /// Get the GPIO pin input
-    pub fn get_gpio_attr(&self, bank: &str, attr: &str) -> Result<u32, Error> {
+    pub fn get_gpio_attr(&self, bank: &str, attr: &str, mboard: usize) -> Result<u32, Error> {
         let bank_c = CString::new(bank)?;
         let attr_c = CString::new(attr)?;
         let mut value: u32 = 0;
 
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_gpio_attr(self.0, bank_c.as_ptr(), attr_c.as_ptr(), 0, &mut value)
+            uhd_sys::uhd_usrp_get_gpio_attr(
+                self.0,
+                bank_c.as_ptr(),
+                attr_c.as_ptr(),
+                mboard as _,
+                &mut value,
+            )
         })?;
         Ok(value)
     }
