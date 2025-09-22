@@ -9,13 +9,29 @@ use crate::{
     TuneRequest, TuneResult,
 };
 
-use std::convert::TryInto;
 use std::ffi::CString;
 use std::ptr;
+use std::{convert::TryInto, sync::Arc};
 /// A connection to a USRP device
-pub struct Usrp(uhd_sys::uhd_usrp_handle);
+struct UsrpInner {
+    raw: uhd_sys::uhd_usrp_handle,
+}
+
+impl Drop for UsrpInner {
+    fn drop(&mut self) {
+        // Ignore error (what errors could really happen that can be handled?)
+        let _ = unsafe { uhd_sys::uhd_usrp_free(&mut self.raw) };
+    }
+}
+
+#[derive(Clone)]
+pub struct Usrp(Arc<UsrpInner>);
 
 impl Usrp {
+    fn raw_ptr(&self) -> uhd_sys::uhd_usrp_handle {
+        self.0.raw
+    }
+
     pub fn find(args: &str) -> Result<Vec<String>, Error> {
         let args = CString::new(args)?;
         let mut addresses = StringVector::new()?;
@@ -37,14 +53,17 @@ impl Usrp {
         let mut handle: uhd_sys::uhd_usrp_handle = ptr::null_mut();
         let args_c = CString::new(args)?;
         check_status(unsafe { uhd_sys::uhd_usrp_make(&mut handle, args_c.as_ptr()) })?;
-        Ok(Usrp(handle))
+        let inner = UsrpInner { raw: handle };
+
+        // Wrap inner in Arc for shared ownership
+        Ok(Usrp(Arc::new(inner)))
     }
 
     /// Returns the antennas available for transmission
     pub fn get_tx_antennas(&self, channel: usize) -> Result<Vec<String>, Error> {
         let mut vector = StringVector::new()?;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_tx_antennas(self.0, channel as _, vector.handle_mut())
+            uhd_sys::uhd_usrp_get_tx_antennas(self.raw_ptr(), channel as _, vector.handle_mut())
         })?;
         Ok(vector.into())
     }
@@ -52,7 +71,7 @@ impl Usrp {
     /// Returns the selected antenna for transmission
     pub fn get_tx_antenna(&self, channel: usize) -> Result<String, Error> {
         copy_string(|buffer, length| unsafe {
-            uhd_sys::uhd_usrp_get_tx_antenna(self.0, channel as _, buffer, length as _)
+            uhd_sys::uhd_usrp_get_tx_antenna(self.raw_ptr(), channel as _, buffer, length as _)
         })
     }
 
@@ -60,7 +79,7 @@ impl Usrp {
     pub fn get_rx_antennas(&self, channel: usize) -> Result<Vec<String>, Error> {
         let mut vector = StringVector::new()?;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_rx_antennas(self.0, channel as _, vector.handle_mut())
+            uhd_sys::uhd_usrp_get_rx_antennas(self.raw_ptr(), channel as _, vector.handle_mut())
         })?;
         Ok(vector.into())
     }
@@ -68,7 +87,7 @@ impl Usrp {
     /// Returns the selected antenna for receiving
     pub fn get_rx_antenna(&self, channel: usize) -> Result<String, Error> {
         copy_string(|buffer, length| unsafe {
-            uhd_sys::uhd_usrp_get_rx_antenna(self.0, channel as _, buffer, length as _)
+            uhd_sys::uhd_usrp_get_rx_antenna(self.raw_ptr(), channel as _, buffer, length as _)
         })
     }
 
@@ -76,7 +95,7 @@ impl Usrp {
     pub fn get_rx_bandwidth(&self, channel: usize) -> Result<f64, Error> {
         let mut value = 0.0;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_rx_bandwidth(self.0, channel as _, &mut value)
+            uhd_sys::uhd_usrp_get_rx_bandwidth(self.raw_ptr(), channel as _, &mut value)
         })?;
         Ok(value)
     }
@@ -85,7 +104,7 @@ impl Usrp {
     pub fn get_rx_bandwidth_range(&self, channel: usize) -> Result<MetaRange, Error> {
         let mut range = MetaRange::default();
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_rx_bandwidth_range(self.0, channel as _, range.handle())
+            uhd_sys::uhd_usrp_get_rx_bandwidth_range(self.raw_ptr(), channel as _, range.handle())
         })?;
         Ok(range)
     }
@@ -94,7 +113,7 @@ impl Usrp {
     pub fn get_tx_bandwidth(&self, channel: usize) -> Result<f64, Error> {
         let mut value = 0.0;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_tx_bandwidth(self.0, channel as _, &mut value)
+            uhd_sys::uhd_usrp_get_tx_bandwidth(self.raw_ptr(), channel as _, &mut value)
         })?;
         Ok(value)
     }
@@ -103,7 +122,7 @@ impl Usrp {
     pub fn get_tx_bandwidth_range(&self, channel: usize) -> Result<MetaRange, Error> {
         let mut range = MetaRange::default();
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_tx_bandwidth_range(self.0, channel as _, range.handle())
+            uhd_sys::uhd_usrp_get_tx_bandwidth_range(self.raw_ptr(), channel as _, range.handle())
         })?;
         Ok(range)
     }
@@ -111,7 +130,9 @@ impl Usrp {
     /// Returns the current receive frequency
     pub fn get_rx_frequency(&self, channel: usize) -> Result<f64, Error> {
         let mut value = 0.0;
-        check_status(unsafe { uhd_sys::uhd_usrp_get_rx_freq(self.0, channel as _, &mut value) })?;
+        check_status(unsafe {
+            uhd_sys::uhd_usrp_get_rx_freq(self.raw_ptr(), channel as _, &mut value)
+        })?;
         Ok(value)
     }
 
@@ -119,7 +140,7 @@ impl Usrp {
     pub fn get_rx_frequency_range(&self, channel: usize) -> Result<MetaRange, Error> {
         let mut range = MetaRange::default();
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_rx_freq_range(self.0, channel as _, range.handle())
+            uhd_sys::uhd_usrp_get_rx_freq_range(self.raw_ptr(), channel as _, range.handle())
         })?;
         Ok(range)
     }
@@ -127,7 +148,9 @@ impl Usrp {
     /// Returns the current transmit frequency
     pub fn get_tx_frequency(&self, channel: usize) -> Result<f64, Error> {
         let mut value = 0.0;
-        check_status(unsafe { uhd_sys::uhd_usrp_get_tx_freq(self.0, channel as _, &mut value) })?;
+        check_status(unsafe {
+            uhd_sys::uhd_usrp_get_tx_freq(self.raw_ptr(), channel as _, &mut value)
+        })?;
         Ok(value)
     }
 
@@ -135,7 +158,7 @@ impl Usrp {
     pub fn get_tx_frequency_range(&self, channel: usize) -> Result<MetaRange, Error> {
         let mut range = MetaRange::default();
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_tx_freq_range(self.0, channel as _, range.handle())
+            uhd_sys::uhd_usrp_get_tx_freq_range(self.raw_ptr(), channel as _, range.handle())
         })?;
         Ok(range)
     }
@@ -145,7 +168,7 @@ impl Usrp {
         let name = CString::new(name)?;
         let mut value = 0.0;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_rx_gain(self.0, channel as _, name.as_ptr(), &mut value)
+            uhd_sys::uhd_usrp_get_rx_gain(self.raw_ptr(), channel as _, name.as_ptr(), &mut value)
         })?;
         Ok(value)
     }
@@ -153,7 +176,7 @@ impl Usrp {
     pub fn get_rx_gain_names(&self, channel: usize) -> Result<Vec<String>, Error> {
         let mut names = StringVector::new()?;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_rx_gain_names(self.0, channel as _, names.handle_mut())
+            uhd_sys::uhd_usrp_get_rx_gain_names(self.raw_ptr(), channel as _, names.handle_mut())
         })?;
         Ok(names.into())
     }
@@ -163,7 +186,12 @@ impl Usrp {
         let name = CString::new(name)?;
         let mut range = MetaRange::default();
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_rx_gain_range(self.0, name.as_ptr(), channel as _, range.handle())
+            uhd_sys::uhd_usrp_get_rx_gain_range(
+                self.raw_ptr(),
+                name.as_ptr(),
+                channel as _,
+                range.handle(),
+            )
         })?;
         Ok(range)
     }
@@ -173,7 +201,7 @@ impl Usrp {
         let name = CString::new(name)?;
         let mut value = 0.0;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_tx_gain(self.0, channel as _, name.as_ptr(), &mut value)
+            uhd_sys::uhd_usrp_get_tx_gain(self.raw_ptr(), channel as _, name.as_ptr(), &mut value)
         })?;
         Ok(value)
     }
@@ -181,7 +209,7 @@ impl Usrp {
     pub fn get_tx_gain_names(&self, channel: usize) -> Result<Vec<String>, Error> {
         let mut names = StringVector::new()?;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_tx_gain_names(self.0, channel as _, names.handle_mut())
+            uhd_sys::uhd_usrp_get_tx_gain_names(self.raw_ptr(), channel as _, names.handle_mut())
         })?;
         Ok(names.into())
     }
@@ -191,21 +219,26 @@ impl Usrp {
         let name = CString::new(name)?;
         let mut range = MetaRange::default();
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_tx_gain_range(self.0, name.as_ptr(), channel as _, range.handle())
+            uhd_sys::uhd_usrp_get_tx_gain_range(
+                self.raw_ptr(),
+                name.as_ptr(),
+                channel as _,
+                range.handle(),
+            )
         })?;
         Ok(range)
     }
 
     /// Clears the command time (?), causing stream commands to be sent immediately
     pub fn clear_command_time(&mut self, mboard: usize) -> Result<(), Error> {
-        check_status(unsafe { uhd_sys::uhd_usrp_clear_command_time(self.0, mboard as _) })
+        check_status(unsafe { uhd_sys::uhd_usrp_clear_command_time(self.raw_ptr(), mboard as _) })
     }
 
     /// Gets the ranges of front-end frequencies for a receive channel
     pub fn get_fe_rx_freq_range(&self, channel: usize) -> Result<MetaRange, Error> {
         let mut range = MetaRange::default();
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_fe_rx_freq_range(self.0, channel as _, range.handle())
+            uhd_sys::uhd_usrp_get_fe_rx_freq_range(self.raw_ptr(), channel as _, range.handle())
         })?;
         Ok(range)
     }
@@ -214,7 +247,7 @@ impl Usrp {
     pub fn get_fe_tx_freq_range(&self, channel: usize) -> Result<MetaRange, Error> {
         let mut range = MetaRange::default();
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_fe_tx_freq_range(self.0, channel as _, range.handle())
+            uhd_sys::uhd_usrp_get_fe_tx_freq_range(self.raw_ptr(), channel as _, range.handle())
         })?;
         Ok(range)
     }
@@ -223,7 +256,7 @@ impl Usrp {
     pub fn get_master_clock_rate(&self, mboard: usize) -> Result<f64, Error> {
         let mut rate = 0.0;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_master_clock_rate(self.0, mboard as _, &mut rate)
+            uhd_sys::uhd_usrp_get_master_clock_rate(self.raw_ptr(), mboard as _, &mut rate)
         })?;
         Ok(rate)
     }
@@ -231,7 +264,7 @@ impl Usrp {
     /// Returns the name of the motherboard
     pub fn get_motherboard_name(&self, mboard: usize) -> Result<String, Error> {
         copy_string(|buffer, length| unsafe {
-            uhd_sys::uhd_usrp_get_mboard_name(self.0, mboard as _, buffer, length as _)
+            uhd_sys::uhd_usrp_get_mboard_name(self.raw_ptr(), mboard as _, buffer, length as _)
         })
     }
 
@@ -239,7 +272,7 @@ impl Usrp {
     pub fn get_normalized_tx_gain(&self, channel: usize) -> Result<f64, Error> {
         let mut value = 0.0;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_normalized_tx_gain(self.0, channel as _, &mut value)
+            uhd_sys::uhd_usrp_get_normalized_tx_gain(self.raw_ptr(), channel as _, &mut value)
         })?;
         Ok(value)
     }
@@ -248,7 +281,7 @@ impl Usrp {
     pub fn get_normalized_rx_gain(&self, channel: usize) -> Result<f64, Error> {
         let mut value = 0.0;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_normalized_rx_gain(self.0, channel as _, &mut value)
+            uhd_sys::uhd_usrp_get_normalized_rx_gain(self.raw_ptr(), channel as _, &mut value)
         })?;
         Ok(value)
     }
@@ -257,7 +290,7 @@ impl Usrp {
     pub fn get_num_motherboards(&self) -> Result<usize, Error> {
         let mut value = 0usize;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_num_mboards(self.0, &mut value as *mut usize as *mut _)
+            uhd_sys::uhd_usrp_get_num_mboards(self.raw_ptr(), &mut value as *mut usize as *mut _)
         })?;
         Ok(value)
     }
@@ -266,7 +299,10 @@ impl Usrp {
     pub fn get_num_tx_channels(&self) -> Result<usize, Error> {
         let mut value = 0usize;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_tx_num_channels(self.0, &mut value as *mut usize as *mut _)
+            uhd_sys::uhd_usrp_get_tx_num_channels(
+                self.raw_ptr(),
+                &mut value as *mut usize as *mut _,
+            )
         })?;
         Ok(value)
     }
@@ -275,7 +311,10 @@ impl Usrp {
     pub fn get_num_rx_channels(&self) -> Result<usize, Error> {
         let mut value = 0usize;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_rx_num_channels(self.0, &mut value as *mut usize as *mut _)
+            uhd_sys::uhd_usrp_get_rx_num_channels(
+                self.raw_ptr(),
+                &mut value as *mut usize as *mut _,
+            )
         })?;
         Ok(value)
     }
@@ -292,21 +331,21 @@ impl Usrp {
         mboard: usize,
     ) -> Result<(), Error> {
         check_status(unsafe {
-            uhd_sys::uhd_usrp_set_user_register(self.0, address, value, mboard as _)
+            uhd_sys::uhd_usrp_set_user_register(self.raw_ptr(), address, value, mboard as _)
         })
     }
 
     /// Returns the current clock source
     pub fn get_clock_source(&self, mboard: usize) -> Result<String, Error> {
         copy_string(|buffer, length| unsafe {
-            uhd_sys::uhd_usrp_get_clock_source(self.0, mboard as _, buffer, length as _)
+            uhd_sys::uhd_usrp_get_clock_source(self.raw_ptr(), mboard as _, buffer, length as _)
         })
     }
     /// Returns the available clock sources
     pub fn get_clock_sources(&self, mboard: usize) -> Result<Vec<String>, Error> {
         let mut vector = StringVector::new()?;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_clock_sources(self.0, mboard as _, vector.handle_mut())
+            uhd_sys::uhd_usrp_get_clock_sources(self.raw_ptr(), mboard as _, vector.handle_mut())
         })?;
         Ok(vector.into())
     }
@@ -314,7 +353,7 @@ impl Usrp {
     /// Returns the current time source
     pub fn get_time_source(&self, mboard: usize) -> Result<String, Error> {
         copy_string(|buffer, length| unsafe {
-            uhd_sys::uhd_usrp_get_time_source(self.0, mboard as _, buffer, length as _)
+            uhd_sys::uhd_usrp_get_time_source(self.raw_ptr(), mboard as _, buffer, length as _)
         })
     }
 
@@ -322,7 +361,7 @@ impl Usrp {
     pub fn get_time_sources(&self, mboard: usize) -> Result<Vec<String>, Error> {
         let mut vector = StringVector::new()?;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_time_sources(self.0, mboard as _, vector.handle_mut())
+            uhd_sys::uhd_usrp_get_time_sources(self.raw_ptr(), mboard as _, vector.handle_mut())
         })?;
         Ok(vector.into())
     }
@@ -331,7 +370,11 @@ impl Usrp {
     pub fn get_mboard_sensor_names(&self, mboard: usize) -> Result<Vec<String>, Error> {
         let mut vector = StringVector::new()?;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_mboard_sensor_names(self.0, mboard as _, vector.handle_mut())
+            uhd_sys::uhd_usrp_get_mboard_sensor_names(
+                self.raw_ptr(),
+                mboard as _,
+                vector.handle_mut(),
+            )
         })?;
         Ok(vector.into())
     }
@@ -340,7 +383,7 @@ impl Usrp {
     pub fn get_motherboard_eeprom(&self, mboard: usize) -> Result<MotherboardEeprom, Error> {
         let mut eeprom = MotherboardEeprom::default();
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_mboard_eeprom(self.0, eeprom.handle(), mboard as _)
+            uhd_sys::uhd_usrp_get_mboard_eeprom(self.raw_ptr(), eeprom.handle(), mboard as _)
         })?;
         Ok(eeprom)
     }
@@ -363,7 +406,7 @@ impl Usrp {
 
         check_status(unsafe {
             uhd_sys::uhd_usrp_get_dboard_eeprom(
-                self.0,
+                self.raw_ptr(),
                 eeprom.handle(),
                 unit.as_ptr(),
                 slot.as_ptr(),
@@ -388,7 +431,7 @@ impl Usrp {
         };
         unsafe {
             check_status(uhd_sys::uhd_usrp_get_rx_info(
-                self.0,
+                self.raw_ptr(),
                 channel as _,
                 &mut info_c,
             ))?;
@@ -412,7 +455,7 @@ impl Usrp {
         };
         unsafe {
             check_status(uhd_sys::uhd_usrp_get_tx_info(
-                self.0,
+                self.raw_ptr(),
                 channel as _,
                 &mut info_c,
             ))?;
@@ -428,7 +471,7 @@ impl Usrp {
         let mut enabled = false;
         check_status(unsafe {
             uhd_sys::uhd_usrp_get_rx_lo_export_enabled(
-                self.0,
+                self.raw_ptr(),
                 name.as_ptr(),
                 channel as _,
                 &mut enabled,
@@ -443,7 +486,7 @@ impl Usrp {
         let mut enabled = false;
         check_status(unsafe {
             uhd_sys::uhd_usrp_get_tx_lo_export_enabled(
-                self.0,
+                self.raw_ptr(),
                 name.as_ptr(),
                 channel as _,
                 &mut enabled,
@@ -457,7 +500,12 @@ impl Usrp {
         let name = CString::new(name)?;
         let mut value = 0.0;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_rx_lo_freq(self.0, name.as_ptr(), channel as _, &mut value)
+            uhd_sys::uhd_usrp_get_rx_lo_freq(
+                self.raw_ptr(),
+                name.as_ptr(),
+                channel as _,
+                &mut value,
+            )
         })?;
         Ok(value)
     }
@@ -466,7 +514,7 @@ impl Usrp {
     pub fn get_rx_lo_names(&self, channel: usize) -> Result<Vec<String>, Error> {
         let mut vector = StringVector::new()?;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_rx_lo_names(self.0, channel as _, vector.handle_mut())
+            uhd_sys::uhd_usrp_get_rx_lo_names(self.raw_ptr(), channel as _, vector.handle_mut())
         })?;
         Ok(vector.into())
     }
@@ -475,7 +523,7 @@ impl Usrp {
     pub fn get_rx_sensor_names(&self, channel: usize) -> Result<Vec<String>, Error> {
         let mut vector = StringVector::new()?;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_rx_sensor_names(self.0, channel as _, vector.handle_mut())
+            uhd_sys::uhd_usrp_get_rx_sensor_names(self.raw_ptr(), channel as _, vector.handle_mut())
         })?;
         Ok(vector.into())
     }
@@ -485,7 +533,12 @@ impl Usrp {
         let name = CString::new(name)?;
         let mut value = 0.0;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_tx_lo_freq(self.0, name.as_ptr(), channel as _, &mut value)
+            uhd_sys::uhd_usrp_get_tx_lo_freq(
+                self.raw_ptr(),
+                name.as_ptr(),
+                channel as _,
+                &mut value,
+            )
         })?;
         Ok(value)
     }
@@ -494,7 +547,7 @@ impl Usrp {
     pub fn get_tx_lo_names(&self, channel: usize) -> Result<Vec<String>, Error> {
         let mut vector = StringVector::new()?;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_tx_lo_names(self.0, channel as _, vector.handle_mut())
+            uhd_sys::uhd_usrp_get_tx_lo_names(self.raw_ptr(), channel as _, vector.handle_mut())
         })?;
         Ok(vector.into())
     }
@@ -503,7 +556,7 @@ impl Usrp {
     pub fn get_tx_sensor_names(&self, channel: usize) -> Result<Vec<String>, Error> {
         let mut vector = StringVector::new()?;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_tx_sensor_names(self.0, channel as _, vector.handle_mut())
+            uhd_sys::uhd_usrp_get_tx_sensor_names(self.raw_ptr(), channel as _, vector.handle_mut())
         })?;
         Ok(vector.into())
     }
@@ -537,7 +590,7 @@ impl Usrp {
         check_status(unsafe { uhd_sys::uhd_rx_streamer_make(streamer.handle_mut()) })?;
         // Associate streamer with USRP
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_rx_stream(self.0, &mut args_c, streamer.handle())
+            uhd_sys::uhd_usrp_get_rx_stream(self.raw_ptr(), &mut args_c, streamer.handle())
         })?;
 
         Ok(streamer)
@@ -572,7 +625,7 @@ impl Usrp {
         check_status(unsafe { uhd_sys::uhd_tx_streamer_make(streamer.handle_mut()) })?;
         // Associate streamer with USRP
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_tx_stream(self.0, &mut args_c, streamer.handle())
+            uhd_sys::uhd_usrp_get_tx_stream(self.raw_ptr(), &mut args_c, streamer.handle())
         })?;
 
         Ok(streamer)
@@ -581,7 +634,9 @@ impl Usrp {
     /// Returns the current receive sample rate in samples/second
     pub fn get_rx_sample_rate(&self, channel: usize) -> Result<f64, Error> {
         let mut value = 0.0;
-        check_status(unsafe { uhd_sys::uhd_usrp_get_rx_rate(self.0, channel as _, &mut value) })?;
+        check_status(unsafe {
+            uhd_sys::uhd_usrp_get_rx_rate(self.raw_ptr(), channel as _, &mut value)
+        })?;
         Ok(value)
     }
 
@@ -589,7 +644,7 @@ impl Usrp {
     pub fn get_rx_sample_rates(&self, channel: usize) -> Result<MetaRange, Error> {
         let mut range = MetaRange::new();
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_rx_rates(self.0, channel as _, range.handle())
+            uhd_sys::uhd_usrp_get_rx_rates(self.raw_ptr(), channel as _, range.handle())
         })?;
         Ok(range)
     }
@@ -597,7 +652,9 @@ impl Usrp {
     /// Returns the current transmit sample rate in samples/second
     pub fn get_tx_sample_rate(&self, channel: usize) -> Result<f64, Error> {
         let mut value = 0.0;
-        check_status(unsafe { uhd_sys::uhd_usrp_get_tx_rate(self.0, channel as _, &mut value) })?;
+        check_status(unsafe {
+            uhd_sys::uhd_usrp_get_tx_rate(self.raw_ptr(), channel as _, &mut value)
+        })?;
         Ok(value)
     }
 
@@ -605,7 +662,7 @@ impl Usrp {
     pub fn get_tx_sample_rates(&self, channel: usize) -> Result<MetaRange, Error> {
         let mut range = MetaRange::new();
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_tx_rates(self.0, channel as _, range.handle())
+            uhd_sys::uhd_usrp_get_tx_rates(self.raw_ptr(), channel as _, range.handle())
         })?;
         Ok(range)
     }
@@ -617,7 +674,7 @@ impl Usrp {
 
         check_status(unsafe {
             uhd_sys::uhd_usrp_get_time_now(
-                self.0,
+                self.raw_ptr(),
                 mboard as _,
                 &mut seconds_time_t,
                 &mut time.fraction,
@@ -631,7 +688,7 @@ impl Usrp {
     pub fn set_clock_source(&self, source: &str, mboard: usize) -> Result<(), Error> {
         let source = CString::new(source)?;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_set_clock_source(self.0, source.as_ptr(), mboard as _)
+            uhd_sys::uhd_usrp_set_clock_source(self.raw_ptr(), source.as_ptr(), mboard as _)
         })
     }
 
@@ -639,14 +696,14 @@ impl Usrp {
     pub fn set_time_source(&self, source: &str, mboard: usize) -> Result<(), Error> {
         let source = CString::new(source)?;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_set_time_source(self.0, source.as_ptr(), mboard as _)
+            uhd_sys::uhd_usrp_set_time_source(self.raw_ptr(), source.as_ptr(), mboard as _)
         })
     }
 
     /// Synchronize the times across all motherboards in this configuration.
     pub fn set_time_unknown_pps(&self, full_secs: i64, frac_secs: f64) -> Result<(), Error> {
         check_status(unsafe {
-            uhd_sys::uhd_usrp_set_time_unknown_pps(self.0, full_secs, frac_secs)
+            uhd_sys::uhd_usrp_set_time_unknown_pps(self.raw_ptr(), full_secs, frac_secs)
         })?;
 
         Ok(())
@@ -660,7 +717,7 @@ impl Usrp {
         mboard: usize,
     ) -> Result<(), Error> {
         check_status(unsafe {
-            uhd_sys::uhd_usrp_set_time_next_pps(self.0, full_secs, frac_secs, mboard as _)
+            uhd_sys::uhd_usrp_set_time_next_pps(self.raw_ptr(), full_secs, frac_secs, mboard as _)
         })?;
 
         Ok(())
@@ -670,7 +727,7 @@ impl Usrp {
     pub fn get_time_synchronized(&self) -> Result<bool, Error> {
         let mut result = false;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_time_synchronized(self.0, &mut result as *mut _)
+            uhd_sys::uhd_usrp_get_time_synchronized(self.raw_ptr(), &mut result as *mut _)
         })?;
 
         Ok(result)
@@ -678,26 +735,28 @@ impl Usrp {
 
     /// Enables or disables the receive automatic gain control
     pub fn set_rx_agc_enabled(&mut self, enabled: bool, channel: usize) -> Result<(), Error> {
-        check_status(unsafe { uhd_sys::uhd_usrp_set_rx_agc(self.0, enabled, channel as _) })
+        check_status(unsafe { uhd_sys::uhd_usrp_set_rx_agc(self.raw_ptr(), enabled, channel as _) })
     }
 
     /// Sets the antenna used to receive
     pub fn set_rx_antenna(&mut self, antenna: &str, channel: usize) -> Result<(), Error> {
         let antenna = CString::new(antenna)?;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_set_rx_antenna(self.0, antenna.as_ptr(), channel as _)
+            uhd_sys::uhd_usrp_set_rx_antenna(self.raw_ptr(), antenna.as_ptr(), channel as _)
         })
     }
 
     /// Sets the receive bandwidth
     pub fn set_rx_bandwidth(&mut self, bandwidth: f64, channel: usize) -> Result<(), Error> {
-        check_status(unsafe { uhd_sys::uhd_usrp_set_rx_bandwidth(self.0, bandwidth, channel as _) })
+        check_status(unsafe {
+            uhd_sys::uhd_usrp_set_rx_bandwidth(self.raw_ptr(), bandwidth, channel as _)
+        })
     }
 
     /// Enables or disables DC offset correction
     pub fn set_rx_dc_offset_enabled(&mut self, enabled: bool, channel: usize) -> Result<(), Error> {
         check_status(unsafe {
-            uhd_sys::uhd_usrp_set_rx_dc_offset_enabled(self.0, enabled, channel as _)
+            uhd_sys::uhd_usrp_set_rx_dc_offset_enabled(self.raw_ptr(), enabled, channel as _)
         })
     }
 
@@ -721,7 +780,12 @@ impl Usrp {
 
         let mut result = TuneResult::default();
         check_status(unsafe {
-            uhd_sys::uhd_usrp_set_rx_freq(self.0, &mut request_c, channel as _, result.inner_mut())
+            uhd_sys::uhd_usrp_set_rx_freq(
+                self.raw_ptr(),
+                &mut request_c,
+                channel as _,
+                result.inner_mut(),
+            )
         })?;
 
         Ok(result)
@@ -731,26 +795,28 @@ impl Usrp {
     pub fn set_rx_gain(&mut self, gain: f64, channel: usize, name: &str) -> Result<(), Error> {
         let name = CString::new(name)?;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_set_rx_gain(self.0, gain, channel as _, name.as_ptr())
+            uhd_sys::uhd_usrp_set_rx_gain(self.raw_ptr(), gain, channel as _, name.as_ptr())
         })
     }
 
     /// Sets the receive sample rate
     pub fn set_rx_sample_rate(&mut self, rate: f64, channel: usize) -> Result<(), Error> {
-        check_status(unsafe { uhd_sys::uhd_usrp_set_rx_rate(self.0, rate, channel as _) })
+        check_status(unsafe { uhd_sys::uhd_usrp_set_rx_rate(self.raw_ptr(), rate, channel as _) })
     }
 
     /// Sets the antenna used to transmit
     pub fn set_tx_antenna(&mut self, antenna: &str, channel: usize) -> Result<(), Error> {
         let antenna = CString::new(antenna)?;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_set_tx_antenna(self.0, antenna.as_ptr(), channel as _)
+            uhd_sys::uhd_usrp_set_tx_antenna(self.raw_ptr(), antenna.as_ptr(), channel as _)
         })
     }
 
     /// Sets the transmit bandwidth
     pub fn set_tx_bandwidth(&mut self, bandwidth: f64, channel: usize) -> Result<(), Error> {
-        check_status(unsafe { uhd_sys::uhd_usrp_set_tx_bandwidth(self.0, bandwidth, channel as _) })
+        check_status(unsafe {
+            uhd_sys::uhd_usrp_set_tx_bandwidth(self.raw_ptr(), bandwidth, channel as _)
+        })
     }
 
     /// Sets the transmit center frequency
@@ -773,7 +839,12 @@ impl Usrp {
 
         let mut result = TuneResult::default();
         check_status(unsafe {
-            uhd_sys::uhd_usrp_set_tx_freq(self.0, &mut request_c, channel as _, result.inner_mut())
+            uhd_sys::uhd_usrp_set_tx_freq(
+                self.raw_ptr(),
+                &mut request_c,
+                channel as _,
+                result.inner_mut(),
+            )
         })?;
 
         Ok(result)
@@ -783,20 +854,20 @@ impl Usrp {
     pub fn set_tx_gain(&mut self, gain: f64, channel: usize, name: &str) -> Result<(), Error> {
         let name = CString::new(name)?;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_set_tx_gain(self.0, gain, channel as _, name.as_ptr())
+            uhd_sys::uhd_usrp_set_tx_gain(self.raw_ptr(), gain, channel as _, name.as_ptr())
         })
     }
 
     /// Sets the transmit sample rate
     pub fn set_tx_sample_rate(&mut self, rate: f64, channel: usize) -> Result<(), Error> {
-        check_status(unsafe { uhd_sys::uhd_usrp_set_tx_rate(self.0, rate, channel as _) })
+        check_status(unsafe { uhd_sys::uhd_usrp_set_tx_rate(self.raw_ptr(), rate, channel as _) })
     }
 
     /// Returns the available GPIO banks
     pub fn get_gpio_banks(&self, mboard: usize) -> Result<Vec<String>, Error> {
         let mut banks = StringVector::new()?;
         check_status(unsafe {
-            uhd_sys::uhd_usrp_get_gpio_banks(self.0, mboard as _, banks.handle_mut())
+            uhd_sys::uhd_usrp_get_gpio_banks(self.raw_ptr(), mboard as _, banks.handle_mut())
         })?;
         Ok(banks.into())
     }
@@ -815,7 +886,7 @@ impl Usrp {
 
         check_status(unsafe {
             uhd_sys::uhd_usrp_set_gpio_attr(
-                self.0,
+                self.raw_ptr(),
                 bank_c.as_ptr(),
                 attr_c.as_ptr(),
                 value,
@@ -833,7 +904,7 @@ impl Usrp {
 
         check_status(unsafe {
             uhd_sys::uhd_usrp_get_gpio_attr(
-                self.0,
+                self.raw_ptr(),
                 bank_c.as_ptr(),
                 attr_c.as_ptr(),
                 mboard as _,
@@ -845,14 +916,9 @@ impl Usrp {
 
     /// Sets the frequency of the master clock
     pub fn set_master_clock_rate(&self, rate: f64, mboard: usize) -> Result<(), Error> {
-        check_status(unsafe { uhd_sys::uhd_usrp_set_master_clock_rate(self.0, rate, mboard as _) })
-    }
-}
-
-impl Drop for Usrp {
-    fn drop(&mut self) {
-        // Ignore error (what errors could really happen that can be handled?)
-        let _ = unsafe { uhd_sys::uhd_usrp_free(&mut self.0) };
+        check_status(unsafe {
+            uhd_sys::uhd_usrp_set_master_clock_rate(self.raw_ptr(), rate, mboard as _)
+        })
     }
 }
 
